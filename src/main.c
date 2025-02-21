@@ -9,7 +9,7 @@ int main(int argc, char *argv[]) {
 
     if (argc < 3) {
 
-        my_write(1, "Invalid arguments", 18);
+        int x = my_write(1, "Invalid arguments", 18);
         return -1;
     }
     return 0;
