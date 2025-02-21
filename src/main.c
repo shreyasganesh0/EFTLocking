@@ -7,11 +7,13 @@
 #include <sys/stat.h>
 #include <string.h>
 
+#include "main.h"
 #include "syscalls.c"
 
 #define READ_BYTES 4096
 
 char *file_buf;
+int num_users;
 
 int main(int argc, char *argv[]) {
 
@@ -19,6 +21,7 @@ int main(int argc, char *argv[]) {
         my_write(1, "Invalid arguments\n");
         return -1;
     }
+    num_users = atoi(argv[2]);
     
     int fd = open(argv, O_RDWR, 666);
     if (fd == -1) {
@@ -33,10 +36,10 @@ int main(int argc, char *argv[]) {
         return -1;
     }
     
-    account_t *workers = malloc(num_users * sizeof(account_t)); 
+    worker_t *workers = malloc(num_users * sizeof(worker_t)); 
     for (int i = 0; i < num_users; i++) {
-        accounts[i].user_id = i + 1;
-        accounts[i].mutex = pthread_mutex_init(accounts[i].mutex,workers
+        pthread_mutex_init(&workers[i].acc1_mtx, NULL);
+        pthread_mutex_init(&workers[i].acc2_mtx, NULL);
     }
     account_setup(fd);
     
@@ -46,14 +49,27 @@ int main(int argc, char *argv[]) {
 void accounts_setup(int fd) {
     ssize_t bytes_read;  
     char buf[READ_BYTES];
+    temp_acc_arr[200];
+    int idx = 0;
 
     while((bytes_read = read(fd, buf, READ_BYTES) > 0) {
         
         char *ptr = buf;
         
+        
         while((char *newline = memchr(ptr, '\n', bytes_read) != NULL) {
-          
+
+            *newline = '\0';
             ehar *space = memchr(ptr, ' ', newline - ptr);
-            strncpy(
-          
+            *space = '\0';
+            account_t account.acc_no = atoi(ptr);
+            ptr = space;
+            ptr++;
+            account.amount = atoi(ptr);
+            
+            temp_acc_arr[idx] = account;
+            idx++;
+        }
+        
+             
              
