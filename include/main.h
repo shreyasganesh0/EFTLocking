@@ -16,9 +16,9 @@ struct {
 account_t* accounts;
 
 struct {
-    account_t sender;
-    account_t reciver;
-    int trans_amt;
+    account_t *sender;
+    account_t *reciver;
+    int amt;
 } txn_t;
 
 struct {

@@ -34,22 +34,53 @@ int main(int argc, char *argv[]) {
     
     workers = malloc(num_workers * sizeof(worker_t));
     for (int i = 0; i < num_workers; i++) {
-        pthread_mutex_init(&workers[i].acc2_mtx, NULL);
+       sem_init(&workers[i].empty, 0, TXN_BUF_SIZE);
+       sem_init(&workers[i].full, 0, 0);
+       workers[i].in = 0;
+       workers[i].out = 0;
     }
-    account_setup(fd);
+    int num_accounts = account_setup(fd);
 
     tid_t distribute_tid;
-    pthread_init(&distribute_tid, distributor, &fd);
+    pthread_create(&distribute_tid, NULL, distributor, &fd);
 
+    pthread_t *worker_tids = malloc(num_workers * sizeof(pthread_t));
+    for (int i = 0; i < num_workers; i++) {
+        pthread_create(&worker_tids[i], NULL, etf_handler, i);
+    }
+
+    pthread_join(distribute_tid, NULL);
+
+    for (int i = 0; i < num_workers; i++) {
+        pthread_join(worker_tids[i], NULL);
+    }
     
+    for (int i = 0; i <= num_accounts; i++) {
+        char retval[100];
+        char *ptr = retval;
+        strcpy(ptr, atoi(accounts[i].acc_no));
+        ptr += strlen(ptr) + 1;
+
+        *ptr = ' ';
+        ptr++;
+        
+        strcpy(ptr, atoi(accounts[i].balance));
+        ptr += strlen(ptr) + 1;
+        *ptr = '\n';
+        ptr++;
+        *ptr = '\0';
+        
+        my_write(1, retval);
+    }
     return 0;
 }
 
-void *distributor(void *arg) {
+void distributor(void *arg) {
 
     int fd = *(int *)arg;
     ssize_t bytes_read;  
     char buf[READ_BYTES];
+    int curr_worker_idx = 0;
 
     while((bytes_read = read(fd, buf, READ_BYTES) > 0) {
         
@@ -84,8 +115,20 @@ void *distributor(void *arg) {
             ptr++; //jmp to transfer amount
 
             int amt = atoi(ptr);
+
+
+            worker_t *curr_worker = &workers[curr_worker_idx];
+            sem_wait(&curr_worker->empty);
+             
+            curr_worker->txn_buf[curr_worker->in].sender = &accounts[from_idx - 1]; 
+            curr_worker->txn_buf[curr_worker->in].reciever = &accounts[to_idx - 1];
+            curr_worker->txn_buf[curr_worker->in].amt = amt;
             
-            idx++;
+            sem_post(&curr_worker->full);
+
+            curr_worker->in++;
+            curr_worker->in = curr_worker->in - (curr_worker->in >= TXN_BUF_SIZE) * TXN_BUF_SIZE; 
+            curr_worker_idx = curr_worker_idx - (curr_worker_idx >= num_workers) * num_workers;
 
             ptr = newline;
             ptr++;//jmp to next line start chr
@@ -94,10 +137,72 @@ void *distributor(void *arg) {
         off_t curr_offset = lseek(fd, 0, SEEK_CUR);
         lseek(fd, curr_offset - (end_ptr - ptr), SEEK_SET); //reset the cursor on exit to avoid skipping bytes
     }
+        for (int i = 0; i < num_workers; i++) {
+            worker_t *curr_worker = &workers[i];
+            sem_wait(&curr_worker->empty);
+             
+            curr_worker->txn_buf[curr_worker->in].sender = &accounts[from_idx - 1]; 
+            curr_worker->txn_buf[curr_worker->in].reciever = &accounts[to_idx - 1];
+            curr_worker->txn_buf[curr_worker->in].amt = -1;
+            
+            sem_post(&curr_worker->full);
+
+            curr_worker->in++;
+            curr_worker->in = curr_worker->in - (curr_worker->in >= TXN_BUF_SIZE) * TXN_BUF_SIZE; 
+            curr_worker_idx = curr_worker_idx - (curr_worker_idx >= num_workers) * num_workers;
+        }
+
 }
 
+void etf_handler(void *arg) {
 
-void accounts_setup(int fd) {
+    int worker_idx = *(int *)arg;
+    worker_t *curr_worker = &workers[worker_idx];
+
+    while (1) {
+        sem_wait(curr_worker->full);
+
+        int sig_count = 0;
+
+        while (curr_worker->out != curr_worker->in) {
+            
+            txn_t *curr_txn = &curr_worker->txn_buf[curr_worker->out];
+            if (curr_txn->sender->acc_no < curr_txn->reciever->acc_no) {
+
+                pthread_mutex_lock(&curr_txn->reciever->acc_mtx); 
+                pthread_mutex_lock(&curr_txn->sender->acc_mtx);
+
+            } else {
+
+                pthread_mutex_lock(&curr_txn->sender->acc_mtx);
+                pthread_mutex_lock(&curr_txn->reciever->acc_mtx); 
+
+            }
+
+            if (curr_txn->amt == -1) {
+                return;
+            }
+
+            curr_txn->sender->balance -= curr_txn->amt;
+            curr_txn->reciver->balance += curr_txn->amt;
+
+            curr_worker->out++;
+            curr_worker->out = curr_worker->out - (curr_worker->out >= TXN_BUF_SIZE) * TXN_BUF_SIZE;
+
+            pthread_mutex_unlock(&curr_txn->sender->acc_mtx);
+            pthread_mutex_unlock(&curr_txn->reciever->acc_mtx); 
+
+            sig_count++;
+        }
+
+        for (int i = 0; i < sig_count; i++) {
+            sem_post(&curr_worker->full);
+        }
+    }
+
+}
+
+int accounts_setup(int fd) {
     ssize_t bytes_read;  
     char buf[READ_BYTES];
     accounts = malloc(capacity * sizeof(account_t));
@@ -142,6 +247,8 @@ void accounts_setup(int fd) {
             break;
         }
     }
+
+    return idx;
 }
 
 
