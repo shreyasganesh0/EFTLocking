@@ -3,14 +3,15 @@
 #include <sys/types.h>
 #include <sys/uio.h>
 #include <fcntl.h>
-#include <sys/mman.h>
 #include <sys/stat.h>
 #include <string.h>
+#include <semaphore.h>
+#include <pthread.h>
+#include <stdio.h>
 
 #include "main.h"
 #include "syscalls.c"
 
-int acc_capcity = 200;
 int main(int argc, char *argv[]) {
 
     if (argc < 3) {
@@ -19,7 +20,7 @@ int main(int argc, char *argv[]) {
     }
     num_workers = atoi(argv[2]);
     
-    int fd = open(argv, O_RDWR, 666);
+    int fd = open(argv[1], O_RDWR, 666);
     if (fd == -1) {
         my_write(1, "Failed to read file\n");
         return  -1;
@@ -41,12 +42,15 @@ int main(int argc, char *argv[]) {
     }
     int num_accounts = account_setup(fd);
 
-    tid_t distribute_tid;
+    pthread_t distribute_tid;
     pthread_create(&distribute_tid, NULL, distributor, &fd);
 
     pthread_t *worker_tids = malloc(num_workers * sizeof(pthread_t));
+    
+    int *idxs = malloc(num_workers * sizeof(int));
     for (int i = 0; i < num_workers; i++) {
-        pthread_create(&worker_tids[i], NULL, etf_handler, i);
+        idxs[i] = i;
+        pthread_create(&worker_tids[i], NULL, etf_handler, &idxs[i]);
     }
 
     pthread_join(distribute_tid, NULL);
@@ -57,37 +61,26 @@ int main(int argc, char *argv[]) {
     
     for (int i = 0; i <= num_accounts; i++) {
         char retval[100];
-        char *ptr = retval;
-        strcpy(ptr, atoi(accounts[i].acc_no));
-        ptr += strlen(ptr) + 1;
-
-        *ptr = ' ';
-        ptr++;
-        
-        strcpy(ptr, atoi(accounts[i].balance));
-        ptr += strlen(ptr) + 1;
-        *ptr = '\n';
-        ptr++;
-        *ptr = '\0';
-        
+        sprintf(retval, "%d %d\n",accounts[i].acc_no, accounts[i].balance); 
         my_write(1, retval);
     }
     return 0;
 }
 
-void distributor(void *arg) {
+void *distributor(void *arg) {
 
     int fd = *(int *)arg;
     ssize_t bytes_read;  
     char buf[READ_BYTES];
     int curr_worker_idx = 0;
+    char *newline;
 
-    while((bytes_read = read(fd, buf, READ_BYTES) > 0) {
+    while ((bytes_read = read(fd, buf, READ_BYTES)) > 0) {
         
         char *ptr = buf;
         char *end_ptr = ptr + bytes_read;
         
-        while((char *newline = memchr(ptr, '\n', end_ptr - ptr) != NULL) {
+        while ((newline = memchr(ptr, '\n', end_ptr - ptr))) {
             // this is the account setup loop
 
             *newline = '\0';
@@ -116,7 +109,6 @@ void distributor(void *arg) {
 
             int amt = atoi(ptr);
 
-
             worker_t *curr_worker = &workers[curr_worker_idx];
             sem_wait(&curr_worker->empty);
              
@@ -135,32 +127,34 @@ void distributor(void *arg) {
         }
 
         off_t curr_offset = lseek(fd, 0, SEEK_CUR);
-        lseek(fd, curr_offset - (end_ptr - ptr), SEEK_SET); //reset the cursor on exit to avoid skipping bytes
+        lseek(fd, curr_offset - (end_ptr - ptr), SEEK_SET); //xit to avoid skipping bytes
     }
-        for (int i = 0; i < num_workers; i++) {
-            worker_t *curr_worker = &workers[i];
-            sem_wait(&curr_worker->empty);
-             
-            curr_worker->txn_buf[curr_worker->in].sender = &accounts[from_idx - 1]; 
-            curr_worker->txn_buf[curr_worker->in].reciever = &accounts[to_idx - 1];
-            curr_worker->txn_buf[curr_worker->in].amt = -1;
-            
-            sem_post(&curr_worker->full);
+	for (int i = 0; i < num_workers; i++) {
 
-            curr_worker->in++;
-            curr_worker->in = curr_worker->in - (curr_worker->in >= TXN_BUF_SIZE) * TXN_BUF_SIZE; 
-            curr_worker_idx = curr_worker_idx - (curr_worker_idx >= num_workers) * num_workers;
-        }
+	    worker_t *curr_worker = &workers[i];
+	    sem_wait(&curr_worker->empty);
+	     
+	    curr_worker->txn_buf[curr_worker->in].sender = &accounts[0]; 
+	    curr_worker->txn_buf[curr_worker->in].reciever = &accounts[0];
+	    curr_worker->txn_buf[curr_worker->in].amt = -1;
+	    
+	    sem_post(&curr_worker->full);
+
+	    curr_worker->in++;
+	    curr_worker->in = curr_worker->in - (curr_worker->in >= TXN_BUF_SIZE) * TXN_BUF_SIZE; 
+	    curr_worker_idx = curr_worker_idx - (curr_worker_idx >= num_workers) * num_workers;
+	}
+    return NULL;
 
 }
 
-void etf_handler(void *arg) {
+void *etf_handler(void *arg) {
 
     int worker_idx = *(int *)arg;
     worker_t *curr_worker = &workers[worker_idx];
 
     while (1) {
-        sem_wait(curr_worker->full);
+        sem_wait(&curr_worker->full);
 
         int sig_count = 0;
 
@@ -180,11 +174,11 @@ void etf_handler(void *arg) {
             }
 
             if (curr_txn->amt == -1) {
-                return;
+                return NULL;
             }
 
             curr_txn->sender->balance -= curr_txn->amt;
-            curr_txn->reciver->balance += curr_txn->amt;
+            curr_txn->reciever->balance += curr_txn->amt;
 
             curr_worker->out++;
             curr_worker->out = curr_worker->out - (curr_worker->out >= TXN_BUF_SIZE) * TXN_BUF_SIZE;
@@ -199,27 +193,29 @@ void etf_handler(void *arg) {
             sem_post(&curr_worker->full);
         }
     }
+    return NULL;
 
 }
 
-int accounts_setup(int fd) {
+int account_setup(int fd) {
     ssize_t bytes_read;  
     char buf[READ_BYTES];
-    accounts = malloc(capacity * sizeof(account_t));
+    accounts = malloc(acc_capacity * sizeof(account_t));
     int idx = 0;
+    char *newline;
 
-    while((bytes_read = read(fd, buf, READ_BYTES) > 0) {
+    while((bytes_read = read(fd, buf, READ_BYTES)) > 0) {
         
         char *ptr = buf;
         char *end_ptr = ptr + bytes_read;
         char transfer_flag = '\0';
         
         
-        while((char *newline = memchr(ptr, '\n', end_ptr - ptr) != NULL) {
+        while((newline = memchr(ptr, '\n', end_ptr - ptr)) != NULL) {
             // this is the account setup loop
 
             *newline = '\0';
-            ehar *space = memchr(ptr, ' ', newline - ptr);
+            char *space = memchr(ptr, ' ', newline - ptr);
 
             *space = '\0';
             if (!strcmp(ptr, "Transfer")) {
