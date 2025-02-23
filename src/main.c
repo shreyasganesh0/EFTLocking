@@ -3,13 +3,12 @@
 #include <sys/types.h>
 #include <sys/uio.h>
 #include <fcntl.h>
-#include <sys/stat.h>
 #include <string.h>
 #include <semaphore.h>
 #include <pthread.h>
-#include <stdio.h>
 
 #include "main.h"
+#include "support.c"
 #include "syscalls.c"
 
 int main(int argc, char *argv[]) {
@@ -51,12 +50,17 @@ int main(int argc, char *argv[]) {
     for (int i = 0; i < num_workers; i++) {
         pthread_join(worker_tids[i], NULL);
     }
+    buf_t *buf;
+    buf->ptr = malloc(4096);
+    buf->capacity = 4096;
+    buf->size = 0;
+    buf->start = buf->ptr;
     
     for (int i = 0; i < num_accounts; i++) {
-        char retval[100];
-        sprintf(retval, "%d %d\n",accounts[i].acc_no, accounts[i].balance); 
-        my_write(1, retval);
+        my_stream_buf(accounts[i].acc_no, accounts[i].balance, buf);
     }
+    *buf->ptr = '\0';
+    my_write(1, buf->start);
     return 0;
 }
 

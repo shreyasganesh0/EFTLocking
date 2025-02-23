@@ -9,6 +9,13 @@ int num_workers;
 int num_accounts;
 
 typedef struct {
+    char *ptr;
+    char *start;
+    int capacity;
+    int size;
+} buf_t;
+
+typedef struct {
     pthread_mutex_t acc_mtx;
     int acc_no;
     int balance;
@@ -33,6 +40,7 @@ worker_t *workers;
 
 void *distributor(void *arg);
 void *etf_handler(void *arg);
+void my_stream_buf(int num, int bal, buf_t *buf);
 int account_setup(int fd);
 
 #endif
