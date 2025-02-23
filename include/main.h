@@ -3,6 +3,7 @@
 
 #define READ_BYTES 4096
 #define TXN_BUF_SIZE 2 //should not be needed for this case 
+#define NO_ACC 100
 
 char *file_buf;
 int num_workers;
@@ -20,7 +21,7 @@ typedef struct {
     int acc_no;
     int balance;
 } account_t;
-account_t accounts[40];
+account_t accounts[NO_ACC];
 
 typedef struct {
     account_t *sender;
