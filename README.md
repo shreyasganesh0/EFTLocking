@@ -27,3 +27,5 @@ build/etf inputfile.txt no_workers
 
 1. include/main.h contains the macro NUM_ACCS used to define the max number of accounts that can be initialized. Update this number to be atleast the number of accounts in the input file
 
+2. If facing syscall error please run the build/etf_debug build instead which is garunteed to run on any system unlike the build/etf binary.
+
