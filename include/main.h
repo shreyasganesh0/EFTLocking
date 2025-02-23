@@ -2,7 +2,7 @@
 #define MAIN_H
 
 #define READ_BYTES 4096
-#define TXN_BUF_SIZE 10 //should not be needed for this case 
+#define TXN_BUF_SIZE 2 //should not be needed for this case 
 
 char *file_buf;
 int num_workers;
@@ -26,6 +26,7 @@ typedef struct {
     txn_t txn_buf[TXN_BUF_SIZE];
     sem_t full;
     sem_t empty;
+    sem_t mtx;
     int in;
     int out;
 } worker_t;
