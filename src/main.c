@@ -37,9 +37,6 @@ int main(int argc, char *argv[]) {
     }
     num_accounts = account_setup(fd);
 
-    pthread_t distribute_tid;
-    pthread_create(&distribute_tid, NULL, distributor, &fd);
-
     pthread_t *worker_tids = malloc(num_workers * sizeof(pthread_t));
     
     int *idxs = malloc(num_workers * sizeof(int));
@@ -48,11 +45,11 @@ int main(int argc, char *argv[]) {
         pthread_create(&worker_tids[i], NULL, etf_handler, &idxs[i]);
     }
 
-    pthread_join(distribute_tid, NULL);
+    distributor(&fd);
+
 
     for (int i = 0; i < num_workers; i++) {
         pthread_join(worker_tids[i], NULL);
-        printf("Joined the thread %d\n", i);
     }
     
     for (int i = 0; i < num_accounts; i++) {
@@ -70,18 +67,15 @@ void *distributor(void *arg) {
     char buf[READ_BYTES];
     int curr_worker_idx = 0;
     char *newline;
-    int loop_count = 1;
     while ((bytes_read = read(fd, buf, READ_BYTES)) > 0) {
         
         char *ptr = buf;
         char *end_ptr = ptr + bytes_read;
         
-        printf("Enter loop count: %d\n", loop_count);
         while ((newline = memchr(ptr, '\n', end_ptr - ptr))) {
             // this is the account setup loop
 
             *newline = '\0';
-            printf("Reading line %s\n", ptr);
             char *space = memchr(ptr, ' ', newline - ptr);
             *space = '\0';
             if (strcmp(ptr, "Transfer")) {
@@ -104,55 +98,58 @@ void *distributor(void *arg) {
             int to_idx = atoi(ptr);
             ptr = space;
             ptr++; //jmp to transfer amount
+            
+            if (to_idx == from_idx) {
+                
+                ptr = newline;
+                ptr++;//jmp to next line start chr
+                continue;
+            }
 
             int amt = atoi(ptr);
 
             worker_t *curr_worker = &workers[curr_worker_idx];
-            printf("Waiting for signal %d\n", curr_worker_idx);
-            sem_wait(&curr_worker->empty);
-            printf("Waiting for buf mtx\n");
-            sem_wait(&curr_worker->mtx);
-            printf("Got buf mtx\n");
+            while (sem_trywait(&curr_worker->empty) == -1) {
+	       curr_worker_idx++;
+	       curr_worker_idx = curr_worker_idx - (curr_worker_idx >= num_workers) * num_workers;
+               curr_worker = &workers[curr_worker_idx]; 
+            }
              
             curr_worker->txn_buf[curr_worker->in].sender = &accounts[from_idx - 1]; 
             curr_worker->txn_buf[curr_worker->in].reciever = &accounts[to_idx - 1];
             curr_worker->txn_buf[curr_worker->in].amt = amt;
             
-            sem_post(&curr_worker->mtx);
+            curr_worker->in++;
+            curr_worker->in = curr_worker->in - (curr_worker->in >= TXN_BUF_SIZE) * TXN_BUF_SIZE; 
+
             sem_post(&curr_worker->full);
             
 
-            curr_worker->in++;
-            curr_worker->in = curr_worker->in - (curr_worker->in >= TXN_BUF_SIZE) * TXN_BUF_SIZE; 
             curr_worker_idx++;
             curr_worker_idx = curr_worker_idx - (curr_worker_idx >= num_workers) * num_workers;
 
             ptr = newline;
             ptr++;//jmp to next line start chr
-            printf("Ran inner loop\n");
         }
 
-        loop_count++;
         off_t curr_offset = lseek(fd, 0, SEEK_CUR);
         lseek(fd, curr_offset - (end_ptr - ptr), SEEK_SET); //xit to avoid skipping bytes
     }
-    printf("No more input lines found\n");
 	for (int i = 0; i < num_workers; i++) {
-            printf("Sending exit code to worker %d\n", i);
 
 	    worker_t *curr_worker = &workers[i];
 	    sem_wait(&curr_worker->empty);
-            sem_wait(&curr_worker->mtx);
+            
 	     
 	    curr_worker->txn_buf[curr_worker->in].sender = &accounts[0]; 
 	    curr_worker->txn_buf[curr_worker->in].reciever = &accounts[1];
 	    curr_worker->txn_buf[curr_worker->in].amt = -1;
 	    
-            sem_post(&curr_worker->mtx);
-	    sem_post(&curr_worker->full);
-
 	    curr_worker->in++;
 	    curr_worker->in = curr_worker->in - (curr_worker->in >= TXN_BUF_SIZE) * TXN_BUF_SIZE; 
+
+	    sem_post(&curr_worker->full);
+
 	}
     return NULL;
 
@@ -165,7 +162,6 @@ void *etf_handler(void *arg) {
 
     while (1) {
         sem_wait(&curr_worker->full);
-        sem_wait(&curr_worker->mtx);
             
         txn_t *curr_txn = &curr_worker->txn_buf[curr_worker->out];
         if (curr_txn->sender->acc_no > curr_txn->reciever->acc_no) {
@@ -176,28 +172,28 @@ void *etf_handler(void *arg) {
         } else {
 
 	    pthread_mutex_lock(&curr_txn->sender->acc_mtx);
+
 	    pthread_mutex_lock(&curr_txn->reciever->acc_mtx); 
 
         }
 
         if (curr_txn->amt == -1) {
-	    printf("\n ------ Exiting thread %d\n\n", worker_idx);
 	    pthread_mutex_unlock(&curr_txn->sender->acc_mtx);
 	    pthread_mutex_unlock(&curr_txn->reciever->acc_mtx); 
-	    sem_post(&curr_worker->mtx);
 	    sem_post(&curr_worker->empty);
     	    return NULL;
         }
+
         curr_txn->sender->balance -= curr_txn->amt;
         curr_txn->reciever->balance += curr_txn->amt;
 
         curr_worker->out++;
         curr_worker->out = curr_worker->out - (curr_worker->out >= TXN_BUF_SIZE) * TXN_BUF_SIZE;
 
+
         pthread_mutex_unlock(&curr_txn->sender->acc_mtx);
         pthread_mutex_unlock(&curr_txn->reciever->acc_mtx); 
 
-        sem_post(&curr_worker->mtx);
         sem_post(&curr_worker->empty);
     }
     return NULL;
@@ -207,7 +203,6 @@ void *etf_handler(void *arg) {
 int account_setup(int fd) {
     ssize_t bytes_read;  
     char buf[READ_BYTES];
-    accounts = malloc(acc_capacity * sizeof(account_t));
     int idx = 0;
     char *newline;
 
@@ -241,14 +236,12 @@ int account_setup(int fd) {
 
             ptr = newline;
             ptr++;//jmp to next line start chr
-            my_write(1, "init one account\n");
         }
 
         off_t curr_offset = lseek(fd, 0, SEEK_CUR);
         lseek(fd, curr_offset - (end_ptr - ptr), SEEK_SET); //reset the cursor on exit to avoid skipping bytes
 
         if (transfer_flag) {
-            my_write(1, "init complete\n");
             break;
         }
     }

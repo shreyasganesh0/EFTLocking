@@ -7,14 +7,13 @@
 char *file_buf;
 int num_workers;
 int num_accounts;
-int acc_capacity = 200;
 
 typedef struct {
     pthread_mutex_t acc_mtx;
     int acc_no;
     int balance;
 } account_t;
-account_t* accounts;
+account_t accounts[40];
 
 typedef struct {
     account_t *sender;
