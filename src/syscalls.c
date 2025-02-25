@@ -30,7 +30,7 @@ size_t n_bytes = strlen((char *)buf);
     register long rax asm("rax") = __NR_write;
 
     asm volatile (
-            "svc #0"
+            "syscall"
             : "=r" (rax)
             : "r" (rax), "r" (rdi), "r" (rsi), "r" (rdx) 
             : "rcx", "r11", "memory"
