@@ -19,7 +19,7 @@ int main(int argc, char *argv[]) {
     }
     num_workers = atoi(argv[2]);
     
-    int fd = open(argv[1], O_RDWR, 666);
+    int fd = open(argv[1], O_RDWR);
     if (fd == -1) {
         my_write(1, "Failed to read file\n");
         return  -1;
@@ -50,7 +50,7 @@ int main(int argc, char *argv[]) {
     for (int i = 0; i < num_workers; i++) {
         pthread_join(worker_tids[i], NULL);
     }
-    buf_t *buf;
+    buf_t *buf = malloc(sizeof(buf_t));
     buf->ptr = malloc(4096);
     buf->capacity = 4096;
     buf->size = 0;
